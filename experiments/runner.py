@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+import random
 import threading
 from typing import Dict, List, Optional, Any
 
@@ -29,6 +30,10 @@ from vansec.nodes.eca import ECA
 from vansec.nodes.tma import TMA
 
 _G = curves.NIST256p.generator
+
+# Reproducible random seed for consistent results across runs.
+# Change to None for non-deterministic behaviour.
+EXPERIMENT_SEED = 42
 
 
 # ===================================================================
@@ -90,6 +95,7 @@ def run_single_vehicle(
     quiet: bool = True,
 ) -> MetricsCollector:
     _print_banner(f"Experiment 1: Single Vehicle — {num_runs} runs")
+    random.seed(EXPERIMENT_SEED)
     mc = collector or MetricsCollector()
     sim = NetworkSimulator()
     eca, tma = _start_servers(simulator=sim, quiet=quiet)
@@ -147,6 +153,7 @@ def run_multi_vehicle(
 ) -> MetricsCollector:
     total_runs = num_vehicles * runs_per_vehicle
     _print_banner(f"Experiment 2: {num_vehicles} vehicles × {runs_per_vehicle} runs")
+    random.seed(EXPERIMENT_SEED)
     mc = collector or MetricsCollector()
     sim = NetworkSimulator()
     eca, tma = _start_servers(simulator=sim, quiet=quiet)
@@ -185,28 +192,46 @@ def run_multi_vehicle(
 # Experiment 3: Scalability Sweep
 # ===================================================================
 
-def run_scalability_test(vehicle_counts=None, runs_per_vehicle=3, quiet=True):
+def run_scalability_test(vehicle_counts=None, runs_per_vehicle=5, quiet=True):
     counts = vehicle_counts or [1, 5, 10, 20]
     _print_banner(f"Experiment 3: Scalability — {counts}")
+    random.seed(EXPERIMENT_SEED)
     results = {"counts": counts, "avg_times": [], "throughputs": []}
-    sim = NetworkSimulator()
-    eca, tma = _start_servers(simulator=sim, quiet=quiet)
+
     for idx, count in enumerate(counts):
+        # Fresh simulator PER vehicle-count so metrics accumulate correctly
+        sim = NetworkSimulator()
+        eca, tma = _start_servers(
+            eca_port=config.ECA_PORT + idx * 2,
+            tma_port=config.TMA_PORT + idx * 2,
+            simulator=sim,
+            quiet=quiet,
+        )
+        time.sleep(0.15)
         mc = MetricsCollector()
         gid = 0
         for vid in range(1, count + 1):
-            v = Vehicle(vehicle_id=config.VEHICLE_IDENTITY + vid, simulator=sim, quiet=quiet)
+            v = Vehicle(
+                vehicle_id=config.VEHICLE_IDENTITY + vid,
+                simulator=sim, quiet=quiet,
+            )
             for _ in range(runs_per_vehicle):
                 gid += 1
-                r = v.run_protocol()
-                mc.record_run(gid, vid, r.get("phase1_time"), r.get("phase2_time"), r.get("status","UNKNOWN"))
-                sim.reset()
+                r = v.run_protocol(
+                    eca_port=config.ECA_PORT + idx * 2,
+                    tma_port=config.TMA_PORT + idx * 2,
+                )
+                mc.record_run(gid, vid, r.get("phase1_time"),
+                              r.get("phase2_time"), r.get("status", "UNKNOWN"))
+                # Do NOT reset sim here — we need accumulated logs for throughput
                 time.sleep(0.02)
         s = mc.summary()
-        m = sim.get_metrics()
+        m = sim.get_metrics()  # now has all logs for this vehicle-count
         results["avg_times"].append(s["avg_total_s"])
         results["throughputs"].append(m.get("Throughput (bps)", 0))
-        print(f"  [{idx+1}/{len(counts)}] Vehicles={count:>3d}: avg={s['avg_total_s']*1000:.2f} ms")
+        print(f"  [{idx+1}/{len(counts)}] Vehicles={count:>3d}: "
+              f"avg={s['avg_total_s']*1000:.2f} ms  "
+              f"throughput={m.get('Throughput (bps)', 0)/1000:.1f} Kbps")
 
     _print_summary_box("Experiment 3: Scalability", [
         (f"{c} vehicles", f"{t*1000:.2f} ms")
@@ -219,9 +244,10 @@ def run_scalability_test(vehicle_counts=None, runs_per_vehicle=3, quiet=True):
 # Experiment 4: Loss Rate Sweep
 # ===================================================================
 
-def run_loss_rate_sweep(loss_rates=None, num_runs=10, quiet=True):
+def run_loss_rate_sweep(loss_rates=None, num_runs=50, quiet=True):
     rates = loss_rates or [0.0, 0.05, 0.10, 0.20, 0.30]
     _print_banner(f"Experiment 4: Loss Rate Sweep — {[f'{r*100:.0f}%' for r in rates]}")
+    random.seed(EXPERIMENT_SEED)
     results = {"loss_rates": rates, "pdr": [], "avg_latency": [], "jitter": []}
     for idx, rate in enumerate(rates):
         sim = NetworkSimulator(loss_rate=rate)
@@ -243,7 +269,9 @@ def run_loss_rate_sweep(loss_rates=None, num_runs=10, quiet=True):
         results["pdr"].append(m.get("PDR (%)", 0))
         results["avg_latency"].append(m.get("Average Delay (s)", 0))
         results["jitter"].append(m.get("Jitter (s)", 0))
-        print(f"  [{idx+1}/{len(rates)}] Loss={rate*100:>5.1f}%: PDR={m.get('PDR (%)',0):.1f}%")
+        print(f"  [{idx+1}/{len(rates)}] Loss={rate*100:>5.1f}%: "
+              f"PDR={m.get('PDR (%)',0):.1f}%  "
+              f"sent={sim.total_sent} rcvd={sim.total_received}")
 
     _print_summary_box("Experiment 4: Loss Rate Sweep", [
         (f"Loss {r*100:.0f}%", f"PDR={p:.1f}%")
@@ -357,6 +385,7 @@ def run_all() -> None:
                 avg_flood_ms=float(dos["avg_flood_ms"]),
                 post_flood_ms=float(dos["post_flood_ms"]),
                 flood_count=int(dos["flood_packets"]),
+                total_flood_ms=float(dos["total_flood_ms"]),
             )
     except Exception as e:
         print(f"  [WARN] Attacks skipped: {e}")

@@ -60,13 +60,24 @@ class Plotter:
         runs_csv: str,
         filename: str = "phase_latency_per_run.png",
     ) -> str:
-        """Line chart: Phase 1 & Phase 2 time vs. run number."""
+        """Line chart: Phase 1 & Phase 2 time vs. run number.
+
+        Only plots SUCCESSFUL runs (non-empty phase times).
+        Failed runs are not shown — plotting them as 0 ms would be
+        misleading since no actual verification occurred.
+        """
         runs, p1, p2 = [], [], []
         with open(runs_csv, newline="") as f:
             for row in csv.DictReader(f):
+                # Skip failed runs: empty phase times mean packet loss / error
+                if not row["phase1_time"] or not row["phase2_time"]:
+                    continue
                 runs.append(int(row["run_id"]))
-                p1.append(float(row["phase1_time"]) * 1000 if row["phase1_time"] else 0)
-                p2.append(float(row["phase2_time"]) * 1000 if row["phase2_time"] else 0)
+                p1.append(float(row["phase1_time"]) * 1000)
+                p2.append(float(row["phase2_time"]) * 1000)
+
+        if not runs:
+            return ""
 
         fig, ax = plt.subplots(figsize=(10, 5))
         ax.plot(runs, p1, marker="o", label="Phase 1 (auth)", linewidth=1.5, color=_COLORS["blue"])
@@ -74,7 +85,7 @@ class Plotter:
         ax.set_xlabel("Run #")
         ax.set_ylabel("Latency (ms)")
         ax.set_title("Phase 1 & Phase 2 Latency per Run\n"
-                      f"({len(runs)} runs, 6 Mbps channel, 5% loss)",
+                      f"({len(runs)} successful runs, 6 Mbps channel, 5% loss)",
                       fontsize=12)
         ax.legend()
         self._apply_style(ax)
@@ -104,7 +115,9 @@ class Plotter:
         )
         ax.set_xlabel("Number of Vehicles")
         ax.set_ylabel("Avg Total Latency (ms)")
-        ax.set_title("Scalability: Latency vs. Vehicle Count", fontsize=12)
+        ax.set_title("Scalability: Latency vs. Vehicle Count\n"
+                      "(sequential execution, 5 runs/vehicle)",
+                      fontsize=12)
         self._apply_style(ax)
         # add value labels on top of bars
         for bar, val in zip(bars, avg_times):
@@ -139,7 +152,9 @@ class Plotter:
                         xytext=(0, 10), ha="center", fontsize=9)
         ax.set_xlabel("Packet Loss Rate (%)")
         ax.set_ylabel("Packet Delivery Ratio (%)")
-        ax.set_title("PDR vs. Packet Loss Rate", fontsize=12)
+        ax.set_title("PDR vs. Packet Loss Rate\n"
+                      "(50 runs per loss rate, Bernoulli loss model)",
+                      fontsize=12)
         ax.set_ylim(0, 105)
         self._apply_style(ax)
         path = os.path.join(self.output_dir, filename)
@@ -168,7 +183,9 @@ class Plotter:
                         xytext=(0, 10), ha="center", fontsize=9)
         ax.set_xlabel("Packet Loss Rate (%)")
         ax.set_ylabel("Avg Latency (ms)")
-        ax.set_title("Average Latency vs. Packet Loss Rate", fontsize=12)
+        ax.set_title("Average Latency vs. Packet Loss Rate\n"
+                      "(delivered packets only, 50 runs per rate)",
+                      fontsize=12)
         self._apply_style(ax)
         path = os.path.join(self.output_dir, filename)
         fig.tight_layout()
@@ -265,7 +282,9 @@ class Plotter:
         )
         ax.set_xlabel("Number of Vehicles")
         ax.set_ylabel("Throughput (Kbps)")
-        ax.set_title("Throughput vs. Vehicle Count", fontsize=12)
+        ax.set_title("Throughput vs. Vehicle Count\n"
+                      "(aggregate delivered bits / total delivery time)",
+                      fontsize=12)
         self._apply_style(ax)
         for bar, val in zip(bars, throughputs):
             ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.5,
@@ -296,7 +315,9 @@ class Plotter:
                         xytext=(0, 10), ha="center", fontsize=9)
         ax.set_xlabel("Packet Loss Rate (%)")
         ax.set_ylabel("Jitter (ms)")
-        ax.set_title("Jitter vs. Packet Loss Rate", fontsize=12)
+        ax.set_title("Jitter vs. Packet Loss Rate\n"
+                      "(mean interarrival deviation, 50 runs per rate)",
+                      fontsize=12)
         self._apply_style(ax)
         path = os.path.join(self.output_dir, filename)
         fig.tight_layout()
@@ -356,7 +377,7 @@ class Plotter:
         return path
 
     # ───────────────────────────────────────────────
-    # Graph 10: DoS attack impact
+    # Graph 10: DoS attack impact (reframed)
     # ───────────────────────────────────────────────
 
     def plot_dos_impact(
@@ -365,31 +386,54 @@ class Plotter:
         avg_flood_ms: float,
         post_flood_ms: float,
         flood_count: int,
+        total_flood_ms: float = 0.0,
         filename: str = "dos_impact.png",
     ) -> str:
-        """Bar chart: baseline vs. flood vs. post-flood verification time."""
+        """Grouped bar chart: per-packet cost + total resource consumption."""
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 5),
+                                        gridspec_kw={"width_ratios": [3, 2]})
+
+        # Left panel: per-packet verification time
         categories = [
             "Baseline\n(legitimate)",
-            f"During Flood\n({flood_count} forged pkts)",
+            f"Flood Packet\n(forged sig)",
             "Post-Flood\n(legitimate)",
         ]
         times = [baseline_ms, avg_flood_ms, post_flood_ms]
         colors = [_COLORS["green"], _COLORS["red"], _COLORS["blue"]]
-
-        fig, ax = plt.subplots(figsize=(8, 5))
-        bars = ax.bar(categories, times, color=colors, edgecolor="black", width=0.5)
-        ax.set_ylabel("Avg Verification Time (ms)")
-        ax.set_title("DoS Flood Attack — Impact on TMA Verification Time\n"
-                      f"({flood_count} packets with random ECDSA signatures)",
-                      fontsize=12)
-        self._apply_style(ax)
+        bars = ax1.bar(categories, times, color=colors, edgecolor="black", width=0.5)
+        ax1.set_ylabel("Verification Time (ms)")
+        ax1.set_title("Per-Packet Verification Cost", fontsize=11)
+        self._apply_style(ax1)
         for bar, val in zip(bars, times):
-            ax.text(
+            ax1.text(
                 bar.get_x() + bar.get_width() / 2,
-                bar.get_height() + max(times) * 0.02,
+                bar.get_height() + max(times) * 0.03,
                 f"{val:.2f} ms",
-                ha="center", va="bottom", fontsize=11, fontweight="bold",
+                ha="center", va="bottom", fontsize=10, fontweight="bold",
             )
+
+        # Right panel: total resource consumption
+        total_legit = baseline_ms  # 1 packet
+        total_flood = total_flood_ms if total_flood_ms > 0 else avg_flood_ms * flood_count
+        cat2 = ["1 Legitimate\nPacket", f"{flood_count} Flood\nPackets"]
+        vals2 = [total_legit, total_flood]
+        colors2 = [_COLORS["green"], _COLORS["red"]]
+        bars2 = ax2.bar(cat2, vals2, color=colors2, edgecolor="black", width=0.5)
+        ax2.set_ylabel("Total CPU Time (ms)")
+        ax2.set_title("Aggregate TMA Resource Cost", fontsize=11)
+        self._apply_style(ax2)
+        for bar, val in zip(bars2, vals2):
+            ax2.text(
+                bar.get_x() + bar.get_width() / 2,
+                bar.get_height() + max(vals2) * 0.03,
+                f"{val:.1f} ms",
+                ha="center", va="bottom", fontsize=10, fontweight="bold",
+            )
+
+        fig.suptitle(f"DoS Flood Attack — Impact on TMA Resources\n"
+                     f"({flood_count} packets with random ECDSA signatures)",
+                     fontsize=13, fontweight="bold")
         path = os.path.join(self.output_dir, filename)
         fig.tight_layout()
         fig.savefig(path, dpi=150)

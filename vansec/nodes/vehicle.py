@@ -32,10 +32,12 @@ class Vehicle:
         vehicle_id: int = config.VEHICLE_IDENTITY,
         priv_key: int = config.VEHICLE_PRIV_KEY,
         simulator: NetworkSimulator | None = None,
+        quiet: bool = False,
     ):
         self.identity = vehicle_id
         self.priv_key = priv_key
         self.sim = simulator
+        self.quiet = quiet
 
         self.eca_pub_key = config.ECA_PUB_KEY
         self.tma_pub_key = config.TMA_PUB_KEY
@@ -96,17 +98,21 @@ class Vehicle:
 
             if not token_ok:
                 result["status"] = "VERIFY_FAIL_PHASE1"
-                print("[VEHICLE] sigma_t verification FAILED")
+                if not self.quiet:
+                    print("[VEHICLE] sigma_t verification FAILED")
                 return result
-            print(f"[VEHICLE] Phase 1 OK ({result['phase1_time']:.4f}s)")
+            if not self.quiet:
+                print(f"[VEHICLE] Phase 1 OK ({result['phase1_time']:.4f}s)")
 
         except ConnectionError as e:
             result["status"] = f"PACKET_LOSS_PHASE1: {e}"
-            print(f"[VEHICLE] Phase 1 packet lost: {e}")
+            if not self.quiet:
+                print(f"[VEHICLE] Phase 1 packet lost: {e}")
             return result
         except Exception as e:
             result["status"] = f"ERROR_PHASE1: {e}"
-            print(f"[VEHICLE] Phase 1 error: {e}")
+            if not self.quiet:
+                print(f"[VEHICLE] Phase 1 error: {e}")
             return result
 
         # ── Phase 2: send signed message to TMA ─────────────────────
@@ -133,14 +139,17 @@ class Vehicle:
 
             p2_end = time.perf_counter()
             result["phase2_time"] = p2_end - p2_start
-            print(f"[VEHICLE] Phase 2 OK ({result['phase2_time']:.4f}s)")
-            print(f"[VEHICLE] TMA reply: {tma_reply}")
+            if not self.quiet:
+                print(f"[VEHICLE] Phase 2 OK ({result['phase2_time']:.4f}s)")
+                print(f"[VEHICLE] TMA reply: {tma_reply}")
 
         except ConnectionError as e:
             result["status"] = f"PACKET_LOSS_PHASE2: {e}"
-            print(f"[VEHICLE] Phase 2 packet lost: {e}")
+            if not self.quiet:
+                print(f"[VEHICLE] Phase 2 packet lost: {e}")
         except Exception as e:
             result["status"] = f"ERROR_PHASE2: {e}"
-            print(f"[VEHICLE] Phase 2 error: {e}")
+            if not self.quiet:
+                print(f"[VEHICLE] Phase 2 error: {e}")
 
         return result

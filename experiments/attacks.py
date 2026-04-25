@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 experiments/attacks.py — Simulated attack scenarios for VANSEC.
-Demonstrates detection of: replay, tamper, and impersonation attacks.
+Demonstrates detection of: replay, tamper, impersonation, and DoS attacks.
 """
 
 from __future__ import annotations
@@ -76,6 +76,10 @@ def _verify(packet, max_age=5.0):
     )
 
 
+# ===================================================================
+# Attack 1: Replay Attack
+# ===================================================================
+
 def test_replay_attack() -> Dict[str, str]:
     _print_banner("Replay Attack")
     packet, *_ = _run_legitimate_protocol()
@@ -103,6 +107,10 @@ def test_replay_attack() -> Dict[str, str]:
     }
 
 
+# ===================================================================
+# Attack 2: Tamper Attack (ciphertext)
+# ===================================================================
+
 def test_tamper_attack() -> Dict[str, str]:
     _print_banner("Tamper Attack (ciphertext)")
     packet, *_ = _run_legitimate_protocol()
@@ -124,6 +132,10 @@ def test_tamper_attack() -> Dict[str, str]:
     }
 
 
+# ===================================================================
+# Attack 3: Tamper Attack (sigma2)
+# ===================================================================
+
 def test_tamper_sigma_attack() -> Dict[str, str]:
     _print_banner("Tamper Attack (sigma2)")
     packet, *_ = _run_legitimate_protocol()
@@ -141,6 +153,10 @@ def test_tamper_sigma_attack() -> Dict[str, str]:
         "detected": "YES" if detected else "NO",
     }
 
+
+# ===================================================================
+# Attack 4: Impersonation Attack
+# ===================================================================
 
 def test_impersonation_attack() -> Dict[str, str]:
     _print_banner("Impersonation Attack")
@@ -162,6 +178,84 @@ def test_impersonation_attack() -> Dict[str, str]:
     }
 
 
+# ===================================================================
+# Attack 5: DoS Flood Attack
+# ===================================================================
+
+def test_dos_flood_attack(num_flood_packets: int = 50) -> Dict[str, str]:
+    """
+    DoS Flood Attack — Application-layer packet flooding.
+
+    The attacker sends N packets with forged (random) ECDSA signatures
+    to the TMA.  Each packet forces the TMA to attempt signature
+    verification, consuming CPU.  This test measures:
+      - Whether all forged packets are rejected (100 % detection)
+      - The average CPU cost per invalid packet
+      - Whether a legitimate packet still succeeds after the flood
+
+    Category : Outsider / Active / Local / Malicious
+    Layer    : Application
+    Property : Availability
+    """
+    _print_banner("DoS Flood Attack")
+
+    # ── Step 1: Baseline — one legitimate packet ───────────────────
+    packet, *_ = _run_legitimate_protocol()
+    t0 = time.perf_counter()
+    baseline_result = _verify(packet)
+    baseline_time = time.perf_counter() - t0
+    print(f"  Baseline verify : {baseline_time*1000:.2f} ms  (all_ok={baseline_result.all_ok})")
+
+    # ── Step 2: Flood — N packets with random signatures ───────────
+    flood_times = []
+    rejected_count = 0
+    for i in range(num_flood_packets):
+        # Build a structurally valid packet then overwrite the signature
+        forged, *_ = _run_legitimate_protocol()
+        forged.vehicle_sig = os.urandom(64)          # random 64-byte "signature"
+
+        t0 = time.perf_counter()
+        result = _verify(forged, max_age=30.0)
+        elapsed = time.perf_counter() - t0
+        flood_times.append(elapsed)
+        if not result.all_ok:
+            rejected_count += 1
+
+    avg_flood_time = sum(flood_times) / len(flood_times) if flood_times else 0.0
+    total_flood_time = sum(flood_times)
+
+    # ── Step 3: Post-flood — legitimate packet again ───────────────
+    packet2, *_ = _run_legitimate_protocol()
+    t0 = time.perf_counter()
+    post_result = _verify(packet2)
+    post_time = time.perf_counter() - t0
+
+    print(f"  Flood packets   : {num_flood_packets}")
+    print(f"  Rejected by TMA : {rejected_count}/{num_flood_packets}")
+    print(f"  Avg verify time : {avg_flood_time*1000:.2f} ms per invalid packet")
+    print(f"  Total flood cost: {total_flood_time*1000:.1f} ms  ({total_flood_time:.3f} s)")
+    print(f"  Post-flood OK   : {post_time*1000:.2f} ms  (all_ok={post_result.all_ok})")
+
+    all_rejected = rejected_count == num_flood_packets
+    detected = all_rejected and post_result.all_ok
+    return {
+        "type": "DoS Flood Attack",
+        "expected": f"All {num_flood_packets} rejected, TMA available after",
+        "actual": f"Rejected {rejected_count}/{num_flood_packets}, post-flood OK={post_result.all_ok}",
+        "detected": "YES" if detected else "PARTIAL",
+        # Extra fields for plotting
+        "flood_packets": str(num_flood_packets),
+        "baseline_ms": f"{baseline_time*1000:.2f}",
+        "avg_flood_ms": f"{avg_flood_time*1000:.2f}",
+        "total_flood_ms": f"{total_flood_time*1000:.1f}",
+        "post_flood_ms": f"{post_time*1000:.2f}",
+    }
+
+
+# ===================================================================
+# Run All Attacks
+# ===================================================================
+
 def run_all_attacks() -> List[Dict[str, str]]:
     _print_banner("Running All Attack Simulations")
     results = [
@@ -169,11 +263,30 @@ def run_all_attacks() -> List[Dict[str, str]]:
         test_tamper_attack(),
         test_tamper_sigma_attack(),
         test_impersonation_attack(),
+        test_dos_flood_attack(),
     ]
-    print(f"\n{'-'*72}\n  ATTACK SUMMARY\n{'-'*72}")
+
+    # ── Formatted summary table ──────────────────────────────────
+    col1, col2, col3 = 32, 10, 22
+    sep = f"  ├{'─'*(col1+2)}┼{'─'*(col2+2)}┼{'─'*(col3+2)}┤"
+    print(f"\n  ┌{'─'*(col1+2)}┬{'─'*(col2+2)}┬{'─'*(col3+2)}┐")
+    print(f"  │  {'ATTACK DETECTION SUMMARY':<{col1}}│  {'Detected':<{col2}}│  {'Mechanism':<{col3}}│")
+    print(sep)
+
+    mechanisms = {
+        "Replay Attack": "Timestamp freshness",
+        "Tamper Attack (ciphertext)": "ECDSA signature",
+        "Tamper Attack (sigma2)": "ECDSA signature",
+        "Impersonation Attack": "ECDSA signature",
+        "DoS Flood Attack": "All packets rejected",
+    }
+
     for r in results:
-        icon = "YES" if r["detected"] == "YES" else "NO "
-        print(f"  [{icon}] {r['type']:40s} → {r['actual']}")
+        icon = "✓ YES" if r["detected"] == "YES" else "~ PARTIAL" if r["detected"] == "PARTIAL" else "✗ NO"
+        mech = mechanisms.get(r["type"], "—")
+        print(f"  │  {r['type']:<{col1}}│  {icon:<{col2}}│  {mech:<{col3}}│")
+
+    print(f"  └{'─'*(col1+2)}┴{'─'*(col2+2)}┴{'─'*(col3+2)}┘")
     return results
 
 

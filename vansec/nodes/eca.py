@@ -25,10 +25,12 @@ class ECA:
         host: str = config.ECA_HOST,
         port: int = config.ECA_PORT,
         simulator: NetworkSimulator | None = None,
+        quiet: bool = False,
     ):
         self.host = host
         self.port = port
         self.sim = simulator or NetworkSimulator()
+        self.quiet = quiet
         self.priv_key = config.ECA_PRIV_KEY
         self.pub_key = config.ECA_PUB_KEY
         self.sigma = config.ECA_SIGMA
@@ -36,10 +38,12 @@ class ECA:
         self.tma_pub_key = config.TMA_PUB_KEY
 
     def start(self) -> None:
-        print(f"\n{'='*72}\n[ECA] Listening on {self.host}:{self.port}\n{'='*72}")
+        if not self.quiet:
+            print(f"\n{'='*72}\n[ECA] Listening on {self.host}:{self.port}\n{'='*72}")
         channel.listen_and_serve(
             handler=self._handle_connection,
             host=self.host, port=self.port,
+            quiet=self.quiet,
         )
 
     def _handle_connection(self, conn: socket.socket, addr: Tuple[str, int]) -> None:
@@ -47,7 +51,8 @@ class ECA:
         conn.settimeout(config.SOCKET_TIMEOUT)
         try:
             identity_msg = channel.recv_message(conn)
-            print(f"[ECA] Vehicle session from {addr}")
+            if not self.quiet:
+                print(f"[ECA] Vehicle session from {addr}")
 
             challenge, nonce_plain = phase1_eca_challenge(
                 identity_msg=identity_msg,
@@ -71,13 +76,16 @@ class ECA:
                 eca_pub_key=self.pub_key,
             )
             channel.send_message(conn, auth_token)
-            print(f"[ECA] Session done in {time.time()-start_wall:.4f}s")
+            if not self.quiet:
+                print(f"[ECA] Session done in {time.time()-start_wall:.4f}s")
 
         except ValueError as ve:
-            print(f"[ECA] Auth FAILED: {ve}")
+            if not self.quiet:
+                print(f"[ECA] Auth FAILED: {ve}")
             try: channel.send_message(conn, {"error": str(ve)})
             except Exception: pass
         except Exception as e:
-            print(f"[ECA] Error: {e}")
+            if not self.quiet:
+                print(f"[ECA] Error: {e}")
             try: channel.send_message(conn, {"error": str(e)})
             except Exception: pass

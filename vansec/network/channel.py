@@ -166,6 +166,7 @@ def listen_and_serve(
     host: str = "127.0.0.1",
     port: int = 8001,
     backlog: int = 8,
+    quiet: bool = False,
 ) -> None:
     """
     Bind a TCP server to (*host*, *port*) and call *handler(conn, addr)*
@@ -177,7 +178,8 @@ def listen_and_serve(
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind((host, port))
     srv.listen(backlog)
-    print(f"[CHANNEL] Listening on {host}:{port} ...")
+    if not quiet:
+        print(f"[CHANNEL] Listening on {host}:{port} ...")
 
     try:
         while True:
@@ -185,10 +187,12 @@ def listen_and_serve(
             try:
                 handler(conn, addr)
             except Exception as exc:
-                print(f"[CHANNEL] Error handling {addr}: {exc}")
+                if not quiet:
+                    print(f"[CHANNEL] Error handling {addr}: {exc}")
             finally:
                 conn.close()
     except KeyboardInterrupt:
-        print("\n[CHANNEL] Server shutting down.")
+        if not quiet:
+            print("\n[CHANNEL] Server shutting down.")
     finally:
         srv.close()

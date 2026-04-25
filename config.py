@@ -7,7 +7,7 @@ live here. Every other module imports from this single source of truth.
 """
 from ecdsa import curves, ellipticcurve
 
-# Wrapper to mimic fastecdsa API
+# Wrapper for NIST P-256 curve constants
 class P256Wrapper:
     def __init__(self):
         self.curve = curves.NIST256p

@@ -161,7 +161,7 @@ def main():
     )
     parser.add_argument(
         "--mode",
-        choices=["single", "multi", "scale", "loss", "crypto", "attacks", "all", "menu"],
+        choices=["single", "multi", "scale", "loss", "crypto", "attacks", "all", "menu", "visual"],
         default="all",
         help="Which experiment to run (default: all)",
     )
@@ -219,6 +219,10 @@ def main():
 
     elif args.mode == "attacks":
         results = run_all_attacks()
+
+    elif args.mode == "visual":
+        from visual.demo_runner import run_visual_demo
+        run_visual_demo()
 
 
 if __name__ == "__main__":
